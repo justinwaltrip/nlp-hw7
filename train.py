@@ -8,6 +8,9 @@ import subprocess
 import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, RagRetriever, RagSequenceForGeneration
 
+# TODO remove
+tokenizer = None
+
 
 def print_gpu_memory():
     """
@@ -66,12 +69,13 @@ class BoolQADataset(torch.utils.data.Dataset):
         else:
             input_encoding = question
 
-        input_dict = self.tokenizer.prepare_seq2seq_batch(
-            input_encoding, max_length=self.max_len, return_tensors="pt"
+        input_dict = self.tokenizer(
+            input_encoding, max_length=self.max_len, return_tensors="pt", padding="max_length",
         )
 
         return {
             "input_ids": input_dict["input_ids"],
+            "attention_mask": input_dict["attention_mask"],
             "labels": torch.tensor(
                 answer, dtype=torch.long
             ),  # labels are the answers (yes/no)
@@ -146,9 +150,14 @@ def train(model, num_epochs, train_dataloader, validation_dataloader, device, lr
         correct = 0
 
         for i, batch in enumerate(train_dataloader):
-
             input_ids = batch["input_ids"].to(device)
-            output = model.generate(input_ids)
+            attention_mask = batch["attention_mask"].to(device)
+
+            # resize input_ids, attention_mask
+            input_ids_reshaped = input_ids.reshape(-1, input_ids.shape[-1])
+            attention_mask_reshaped = attention_mask.reshape(-1, attention_mask.shape[-1])
+
+            output = model.generate(input_ids=input_ids_reshaped, attention_mask=attention_mask_reshaped, max_length=2)
             logits = output.logits
 
             # get logits for true, false
@@ -211,6 +220,7 @@ def pre_process(model_name, batch_size, device, small_subset=False, include_gold
     max_len = 128
 
     print("Loading the tokenizer...")
+    global tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     # get token ids for true and false
