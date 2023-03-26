@@ -3,7 +3,6 @@ from torch.utils.data import DataLoader
 from datasets import load_dataset
 import evaluate as evaluate
 from transformers import get_scheduler
-from transformers import AutoModelForSequenceClassification
 import argparse
 import subprocess
 import matplotlib.pyplot as plt
@@ -62,26 +61,17 @@ class BoolQADataset(torch.utils.data.Dataset):
 
         # this is input encoding for your model. Note, question comes first since we are doing question answering
         # and we don't wnt it to be truncated if the passage is too long
-        input_encoding = question + " [SEP] " + passage
+        if self.include_gold_passage:
+            input_encoding = question + " [SEP] " + passage
+        else:
+            input_encoding = question
 
-        # encode_plus will encode the input and return a dictionary of tensors
-        encoded_review = self.tokenizer.encode_plus(
-            input_encoding,
-            add_special_tokens=True,
-            max_length=self.max_len,
-            return_token_type_ids=False,
-            return_attention_mask=True,
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
+        input_dict = self.tokenizer.prepare_seq2seq_batch(
+            input_encoding, max_length=self.max_len, return_tensors="pt"
         )
 
         return {
-            "input_ids": encoded_review["input_ids"][
-                0
-            ],  # we only have one example in the batch
-            "attention_mask": encoded_review["attention_mask"][0],
-            # attention mask tells the model where tokens are padding
+            "input_ids": input_dict["input_ids"],
             "labels": torch.tensor(
                 answer, dtype=torch.long
             ),  # labels are the answers (yes/no)
@@ -114,7 +104,7 @@ def evaluate_model(model, dataloader, device):
     return dev_accuracy.compute()
 
 
-def train(model, num_epochs, train_dataloader, validation_dataloader, device, lr):
+def train(model, num_epochs, train_dataloader, validation_dataloader, device, lr, ids):
     """Train a PyTorch Module
 
     :param torch.nn.Module mymodel: the model to be trained
@@ -156,23 +146,16 @@ def train(model, num_epochs, train_dataloader, validation_dataloader, device, lr
         correct = 0
 
         for i, batch in enumerate(train_dataloader):
-            """
-            You need to make some changes here to make this function work.
-            Specifically, you need to:
-            Extract the input_ids, attention_mask, and labels from the batch; then send them to the device.
-            Then, pass the input_ids and attention_mask to the model to get the logits.
-            Then, compute the loss using the logits and the labels.
-            Then, call loss.backward() to compute the gradients.
-            Then, call optimizer.step()  to update the model parameters.
-            Then, call lr_scheduler.step() to update the learning rate.
-            Then, call optimizer.zero_grad() to reset the gradients for the next iteration.
-            Then, compute the accuracy using the logits and the labels.
-            """
 
             input_ids = batch["input_ids"].to(device)
-            attention_mask = batch["attention_mask"].to(device)
+            output = model.generate(input_ids)
+            logits = output.logits
 
-            output = model(input_ids=input_ids, attention_mask=attention_mask)
+            # get logits for true, false
+            (id_true, id_false) = ids
+            selected_logits = logits[:, [id_true, id_false]]
+            predictions = selected_logits.softmax(dim=1).cpu()
+
             predictions = output.logits
             model_loss = loss(predictions, batch["labels"])
 
@@ -230,6 +213,10 @@ def pre_process(model_name, batch_size, device, small_subset=False, include_gold
     print("Loading the tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
+    # get token ids for true and false
+    id_true = tokenizer.encode("true")[0]
+    id_false = tokenizer.encode("false")[0]
+
     print("Loding the data into DS...")
     train_dataset = BoolQADataset(
         passages=list(dataset_train_subset["passage"]),
@@ -270,7 +257,7 @@ def pre_process(model_name, batch_size, device, small_subset=False, include_gold
 
     print("Moving model to device ..." + str(device))
     pretrained_model.to(device)
-    return pretrained_model, train_dataloader, validation_dataloader, test_dataloader
+    return pretrained_model, train_dataloader, validation_dataloader, test_dataloader, (id_true, id_false)
 
 
 # the entry point of the program
@@ -294,6 +281,7 @@ if __name__ == "__main__":
         train_dataloader,
         validation_dataloader,
         test_dataloader,
+        ids,
     ) = pre_process(args.model, args.batch_size, args.device, args.small_subset)
 
     print(" >>>>>>>>  Starting training ... ")
@@ -304,6 +292,7 @@ if __name__ == "__main__":
         validation_dataloader,
         args.device,
         args.lr,
+        ids,
     )
 
     # print the GPU memory usage just to make sure things are alright
