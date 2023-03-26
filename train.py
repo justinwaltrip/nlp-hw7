@@ -214,8 +214,8 @@ def pre_process(model_name, batch_size, device, small_subset=False, include_gold
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     # get token ids for true and false
-    id_true = tokenizer.encode("true")[0]
-    id_false = tokenizer.encode("false")[0]
+    id_true = tokenizer("true", add_special_tokens=False)["input_ids"][0]
+    id_false = tokenizer("false", add_special_tokens=False)["input_ids"][0]
 
     print("Loding the data into DS...")
     train_dataset = BoolQADataset(

@@ -10,11 +10,12 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
-            "justMyCode": true,
+            "justMyCode": false,
             "args": [
                 "--experiment",
                 "test",
                 "--small_subset",
+                "True",
                 "--num_epochs",
                 "1",
                 "--lr",
@@ -25,7 +26,8 @@
                 "cpu",
                 "--model",
                 "facebook/rag-sequence-nq",
-                "--include_gold_passage"
+                "--include_gold_passage",
+                "True"
             ]
         }
     ]
