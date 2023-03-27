@@ -21,7 +21,7 @@
                 "--lr",
                 "1e-3",
                 "--batch_size",
-                "4",
+                "1",
                 "--device",
                 "cpu",
                 "--model",

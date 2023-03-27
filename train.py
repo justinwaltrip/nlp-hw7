@@ -98,10 +98,19 @@ def evaluate_model(model, dataloader, device):
     for batch in dataloader:
         input_ids = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
-        output = model(input_ids=input_ids, attention_mask=attention_mask)
 
-        predictions = output.logits
-        predictions = torch.argmax(predictions, dim=1)
+        # resize input_ids, attention_mask
+        input_ids_reshaped = input_ids.reshape(-1, input_ids.shape[-1])
+        attention_mask_reshaped = attention_mask.reshape(-1, attention_mask.shape[-1])
+
+        output = model(input_ids=input_ids_reshaped, attention_mask=attention_mask_reshaped, n_docs=1)
+        logits = output.logits
+
+        # get logits for true, false (use only first token in sequence)
+        (id_true, id_false) = ids
+        selected_logits = logits[:, 0, [id_false, id_true]]
+        probabilities = selected_logits.softmax(dim=1)
+        predictions = torch.argmax(probabilities, dim=1).cpu()
         dev_accuracy.add_batch(predictions=predictions, references=batch["labels"])
 
     # compute and return metrics
@@ -157,23 +166,22 @@ def train(model, num_epochs, train_dataloader, validation_dataloader, device, lr
             input_ids_reshaped = input_ids.reshape(-1, input_ids.shape[-1])
             attention_mask_reshaped = attention_mask.reshape(-1, attention_mask.shape[-1])
 
-            output = model.generate(input_ids=input_ids_reshaped, attention_mask=attention_mask_reshaped, max_length=2)
+            output = model(input_ids=input_ids_reshaped, attention_mask=attention_mask_reshaped, n_docs=1)
             logits = output.logits
 
-            # get logits for true, false
+            # get logits for true, false (use only first token in sequence)
             (id_true, id_false) = ids
-            selected_logits = logits[:, [id_true, id_false]]
-            predictions = selected_logits.softmax(dim=1).cpu()
+            selected_logits = logits[:, 0, [id_false, id_true]]
+            probabilities = selected_logits.softmax(dim=1)
 
-            predictions = output.logits
-            model_loss = loss(predictions, batch["labels"])
+            model_loss = loss(probabilities, batch["labels"].to(device))
 
             model_loss.backward()
             optimizer.step()
             lr_scheduler.step()
             optimizer.zero_grad()
 
-            predictions = torch.argmax(predictions, dim=1)
+            predictions = torch.argmax(probabilities, dim=1).cpu()
 
             correct += (predictions == batch["labels"]).sum().item()
 
