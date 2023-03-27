@@ -7,6 +7,7 @@ import argparse
 import subprocess
 import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, RagRetriever, RagSequenceForGeneration
+from pathlib import Path
 
 # TODO remove
 tokenizer = None
@@ -73,10 +74,16 @@ class BoolQADataset(torch.utils.data.Dataset):
             input_encoding, max_length=self.max_len, return_tensors="pt", padding="max_length",
         )
 
+        label = "yes" if answer else "no"
+        label_dict = self.tokenizer(
+            text_target=label, return_tensors="pt",
+        )
+
         return {
             "input_ids": input_dict["input_ids"],
             "attention_mask": input_dict["attention_mask"],
-            "labels": torch.tensor(
+            "labels": label_dict["input_ids"],
+            "targets": torch.tensor(
                 answer, dtype=torch.long
             ),  # labels are the answers (yes/no)
         }
@@ -98,20 +105,22 @@ def evaluate_model(model, dataloader, device):
     for batch in dataloader:
         input_ids = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
+        labels = batch["labels"].to(device)
 
         # resize input_ids, attention_mask
         input_ids_reshaped = input_ids.reshape(-1, input_ids.shape[-1])
         attention_mask_reshaped = attention_mask.reshape(-1, attention_mask.shape[-1])
+        labels_reshaped = labels.reshape(-1, labels.shape[-1])
 
-        output = model(input_ids=input_ids_reshaped, attention_mask=attention_mask_reshaped, n_docs=1)
-        logits = output.logits
+        outputs = model(input_ids=input_ids_reshaped, attention_mask=attention_mask_reshaped, labels=labels_reshaped)
 
-        # get logits for true, false (use only first token in sequence)
-        (id_true, id_false) = ids
-        selected_logits = logits[:, 0, [id_false, id_true]]
+        # get logits for no, yes (use only first token in sequence)
+        logits = outputs.logits.reshape(input_ids_reshaped.shape[0], -1, outputs.logits.shape[-1])
+        (id_yes, id_no) = ids
+        selected_logits = logits[:, 0, [id_no, id_yes]]
         probabilities = selected_logits.softmax(dim=1)
         predictions = torch.argmax(probabilities, dim=1).cpu()
-        dev_accuracy.add_batch(predictions=predictions, references=batch["labels"])
+        dev_accuracy.add_batch(predictions=predictions, references=batch["targets"])
 
     # compute and return metrics
     return dev_accuracy.compute()
@@ -142,7 +151,7 @@ def train(model, num_epochs, train_dataloader, validation_dataloader, device, lr
         num_training_steps=len(train_dataloader) * num_epochs,
     )
 
-    loss = torch.nn.CrossEntropyLoss()
+    criterion = torch.nn.CrossEntropyLoss()
 
     train_accs = []
 
@@ -157,42 +166,46 @@ def train(model, num_epochs, train_dataloader, validation_dataloader, device, lr
         print(f"Epoch {epoch + 1} training:")
 
         correct = 0
+        loss = 0
 
         for i, batch in enumerate(train_dataloader):
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
+            labels = batch["labels"].to(device)
 
             # resize input_ids, attention_mask
             input_ids_reshaped = input_ids.reshape(-1, input_ids.shape[-1])
             attention_mask_reshaped = attention_mask.reshape(-1, attention_mask.shape[-1])
+            labels_reshaped = labels.reshape(-1, labels.shape[-1])
 
-            output = model(input_ids=input_ids_reshaped, attention_mask=attention_mask_reshaped, n_docs=1)
-            logits = output.logits
+            outputs = model(input_ids=input_ids_reshaped, attention_mask=attention_mask_reshaped, labels=labels_reshaped)
 
-            # get logits for true, false (use only first token in sequence)
-            (id_true, id_false) = ids
-            selected_logits = logits[:, 0, [id_false, id_true]]
-            probabilities = selected_logits.softmax(dim=1)
-
-            model_loss = loss(probabilities, batch["labels"].to(device))
+            model_loss = outputs.loss.sum()
+            loss += model_loss.item()
 
             model_loss.backward()
             optimizer.step()
             lr_scheduler.step()
             optimizer.zero_grad()
 
+            # get logits for no, yes (use only first token in sequence)
+            logits = outputs.logits.reshape(input_ids_reshaped.shape[0], -1, outputs.logits.shape[-1])
+            (id_yes, id_no) = ids
+            selected_logits = logits[:, 0, [id_no, id_yes]]
+            probabilities = selected_logits.softmax(dim=1)
             predictions = torch.argmax(probabilities, dim=1).cpu()
 
-            correct += (predictions == batch["labels"]).sum().item()
+            correct += (predictions == batch["targets"]).sum().item()
 
             # update metrics
             train_accuracy.add_batch(
-                predictions=predictions, references=batch["labels"]
+                predictions=predictions, references=batch["targets"]
             )
 
         # print evaluation metrics
         print(f" ===> Epoch {epoch + 1}")
         print(f" - Average training metrics: accuracy={train_accuracy.compute()}")
+        print(f" - Average training loss: {loss / len(train_dataloader)}")
 
         # normally, validation would be more useful when training for many epochs
         val_accuracy = evaluate_model(model, validation_dataloader, device)
@@ -231,9 +244,9 @@ def pre_process(model_name, batch_size, device, small_subset=False, include_gold
     global tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    # get token ids for true and false
-    id_true = tokenizer("true", add_special_tokens=False)["input_ids"][0]
-    id_false = tokenizer("false", add_special_tokens=False)["input_ids"][0]
+    # get token ids for yes and no
+    id_yes = tokenizer("yes", add_special_tokens=False)["input_ids"][0]
+    id_no = tokenizer("no", add_special_tokens=False)["input_ids"][0]
 
     print("Loding the data into DS...")
     train_dataset = BoolQADataset(
@@ -275,7 +288,7 @@ def pre_process(model_name, batch_size, device, small_subset=False, include_gold
 
     print("Moving model to device ..." + str(device))
     pretrained_model.to(device)
-    return pretrained_model, train_dataloader, validation_dataloader, test_dataloader, (id_true, id_false)
+    return pretrained_model, train_dataloader, validation_dataloader, test_dataloader, (id_yes, id_no)
 
 
 # the entry point of the program
@@ -323,7 +336,9 @@ if __name__ == "__main__":
     print(f" - Average TEST metrics: accuracy={test_accuracy}")
 
     # plot of training accuracy as a function of training epochs
+    save_path = Path(f"figures/{args.experiment}.jpg")
+    save_path.parent.mkdir(parents=True, exist_ok=True)
     plt.plot(train_accs)
     clf = plt.gcf()
-    clf.savefig("figures/three_two.png")
+    clf.savefig(save_path)
     plt.show()
