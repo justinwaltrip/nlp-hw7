@@ -220,14 +220,15 @@ def pre_process(model_name, batch_size, device, small_subset=False, include_gold
     # download dataset
     print("Loading the dataset ...")
     dataset = load_dataset("boolq")
-    dataset = dataset.shuffle()  # shuffle the data
+    dataset = dataset.shuffle(seed=1)  # shuffle the data
 
     print("Slicing the data...")
     if small_subset:
         # use this tiny subset for debugging the implementation
-        dataset_train_subset = dataset["train"][:10]
-        dataset_dev_subset = dataset["train"][:10]
-        dataset_test_subset = dataset["train"][:10]
+        small_subset_size = 16
+        dataset_train_subset = dataset["train"][:small_subset_size]
+        dataset_dev_subset = dataset["train"][:small_subset_size]
+        dataset_test_subset = dataset["train"][:small_subset_size]
     else:
         # since the dataset does not come with any validation data,
         # split the training data into "train" and "dev"
