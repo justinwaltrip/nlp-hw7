@@ -1,3 +1,5 @@
 /.env
 slurm*
 /best_model
+config.env
+.vscode/settings.json
