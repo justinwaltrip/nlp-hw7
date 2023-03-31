@@ -33,28 +33,30 @@ def main():
 
     train_prompt = ""
     for i in range(8):
-        train_prompt += f'{train[i]["question"]}? [SEP] {train[i]["passage"]} [SEP] {train[i]["answer"]} [SEP] '
+        train_prompt += f'Q: {train[i]["question"]} P: {train[i]["passage"][:100]} T or F?: {train[i]["answer"]} '
     train_prompt = train_prompt[:-6]
 
-    # get 30 samples for evaluation
+    # get 100 samples for evaluation
     test = dataset["validation"][:100]
 
     correct = 0
     for i in tqdm(range(100)):
-        test_prompt = f'[SEP] {test["question"][i]}? [SEP] {test["passage"][i]} [SEP]'
-        prompt = f'{train_prompt[:3000]} {test_prompt}'
+        test_prompt = f'Q: {test["question"][i]} P: {test["passage"][i]} T or F?:'
+        prompt = f"{train_prompt[:3000]} {test_prompt}"
 
         response = query({"inputs": prompt})
+        generated = response[0]["generated_text"][len(prompt) + 1:].split(" ")[0]
 
         # print answer
         print(f"Question: {test['question'][i]}")
         print(f"Answer: {test['answer'][i]}")
-        print(f"Prediction: {response[0]['generated_text'].split(' ')[-1]}")
+        print(f"Prediction: {generated}")
 
-        pred = response[0]["generated_text"].split(" ")[-1] == "True"
+        # get token right after prompt
+        pred = generated == "True"
         correct += pred == test["answer"][i]
 
-    print(f"Accuracy: {correct / 30:.2%}")
+    print(f"Accuracy: {correct / 100:.2%}")
 
 
 if __name__ == "__main__":
