@@ -26,17 +26,17 @@ def main():
 
     prompt = ""
     for i in range(8):
-        prompt += f'{train[i]["question"]} [SEP] {train[i]["passage"]} [SEP] {train[i]["answer"]} [SEP] '
+        prompt += f'Q: {train[i]["question"]} P: {train[i]["passage"]} T or F?: {train[i]["answer"]} '
 
     # get 30 samples for evaluation
     test = dataset["validation"][:30]
 
     correct = 0
     for i in tqdm(range(30)):
-        test_prompt = prompt + f'{test["question"][i]} [SEP] {test["passage"][i]} [SEP]'
+        test_prompt = prompt + f'Q: {test["question"][i]} P: {test["passage"][i]} T or F?:'
 
         response = openai.Completion.create(
-            model="text-davinci-003",
+            model="davinci",
             prompt=test_prompt,
             temperature=0.7,
             max_tokens=1,
@@ -44,6 +44,10 @@ def main():
             frequency_penalty=0,
             presence_penalty=0,
         )
+
+        print(f"Question: {test['question'][i]}")
+        print(f"Answer: {test['answer'][i]}")
+        print(f"Prediction: {response['choices'][0]['text'].strip()}")
 
         pred = response["choices"][0]["text"].strip() == "True"
         correct += pred == test["answer"][i]
